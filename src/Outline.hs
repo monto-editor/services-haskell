@@ -32,11 +32,15 @@ data OutlineIcons = OutlineIcons
 
 getOutlineIcons :: IO OutlineIcons
 getOutlineIcons = OutlineIcons
-                  <$> getDataFileName "assets/class.png"
-                  <*> getDataFileName "assets/module.png"
-                  <*> getDataFileName "assets/private.png"
-                  <*> getDataFileName "assets/public.png"
-                  <*> getDataFileName "assets/type.png"
+                  <$> getResource "assets/class.png"
+                  <*> getResource "assets/module.png"
+                  <*> getResource "assets/private.png"
+                  <*> getResource "assets/public.png"
+                  <*> getResource "assets/type.png"
+  where
+    getResource name = do
+      path <- getDataFileName name
+      return $ "file://" ++ path
 
 encodeOutline :: Document -> OutlineIcons -> ParsedModule -> Outline
 encodeOutline doc icons pm =
@@ -60,11 +64,11 @@ encodeOutline doc icons pm =
     outlineDecl :: LHsDecl RdrName -> Maybe Outline
     outlineDecl ldecl = do
       (desc,ico) <- case unLoc ldecl of
-        TyClD (FamDecl _) -> Just ("type-family", typ icons)
-        TyClD (SynDecl {}) -> Just ("type-alias", typ icons)
-        TyClD (DataDecl {}) -> Just ("data-declaration", typ icons)
-        TyClD (ClassDecl {}) -> Just ("class-declarartion", typ icons)
-        SigD (TypeSig {}) -> Just ("type-signature", public icons)
+        TyClD FamDecl{} -> Just ("type-family", typ icons)
+        TyClD SynDecl{} -> Just ("type-alias", typ icons)
+        TyClD DataDecl{} -> Just ("data-declaration", typ icons)
+        TyClD ClassDecl{} -> Just ("class-declarartion", typ icons)
+        SigD TypeSig{} -> Just ("type-signature", public icons)
         _ -> Nothing
       return Outline
         { description = desc
