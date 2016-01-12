@@ -91,27 +91,27 @@ main =
     case eitherErrorOrResp of
       Left errorMessage -> printf "registration failed due to %s\n" (show errorMessage)
       Right (Port p) ->
-        Z.withSocket ctx Z.Pair $ \serviceSocket -> do
-          --Z.withSocket ctx Z.Sub $ \configSocket -> do
-          Z.connect serviceSocket $ serviceAddress cfg ++ show p
-          printf "connected to %s%d\n" (serviceAddress cfg) p
+        Z.withSocket ctx Z.Pair $ \serviceSocket ->
+          Z.withSocket ctx Z.Sub $ \configSocket -> do
+            Z.connect serviceSocket $ serviceAddress cfg ++ show p
+            printf "connected to %s%d\n" (serviceAddress cfg) p
 
-          --Z.connect configSocket (configurationAddress cfg)
-          flip finally (deregister cfg "ghc") $ defaultErrorHandler defaultFatalMessager defaultFlushOut $
-            runGhc (Just libdir) $ do
-              dflags0 <- getSessionDynFlags
-              let dflags = gopt_set dflags0 Opt_KeepRawTokenStream
-              _ <- setSessionDynFlags dflags
+            Z.connect configSocket (configurationAddress cfg)
+            flip finally (deregister cfg "ghc") $ defaultErrorHandler defaultFatalMessager defaultFlushOut $
+              runGhc (Just libdir) $ do
+                dflags0 <- getSessionDynFlags
+                let dflags = gopt_set dflags0 Opt_KeepRawTokenStream
+                _ <- setSessionDynFlags dflags
 
-              forever $ do
-                rawMsg <- liftIO $ Z.receive serviceSocket
-                case eitherDecodeStrict rawMsg of
-                  Right msgs ->
-                    V.forM_ msgs $ \msg -> do
-                      productMessages <- onVersionMessage outlineIcons msg
-                      liftIO $ forM_ productMessages $ Z.send serviceSocket [] . BL.toStrict . encode
-                  Left err ->
-                    liftIO $ printf "Could not decode version message %s\n%s\n" (B.unpack rawMsg) err
+                forever $ do
+                  rawMsg <- liftIO $ Z.receive serviceSocket
+                  case eitherDecodeStrict rawMsg of
+                    Right msgs ->
+                      V.forM_ msgs $ \msg -> do
+                        productMessages <- onVersionMessage outlineIcons msg
+                        liftIO $ forM_ productMessages $ Z.send serviceSocket [] . BL.toStrict . encode
+                    Left err ->
+                      liftIO $ printf "Could not decode version message %s\n%s\n" (B.unpack rawMsg) err
 
 register :: ZMQConfig -> RegisterServiceRequest -> IO (Either Text Port)
 register cfg request =
@@ -181,7 +181,7 @@ compile outlineIcons documentText = flip gfinally clearTargets $ do
         typeErrors <- handleSourceError
                       (return . srcErrorMessages)
                       (typecheckModule pm >> return emptyBag)
-        liftIO $ putStrLn $ unlines $ map show $ encodeTokens document pm
+        --liftIO $ putStrLn $ unlines $ map show $ encodeTokens document pm
         --liftIO $ putStrLn $ drawTree $ fmap show $ encodeAST dflags document (unLoc (pm_parsed_source pm))
         --liftIO $ print $ encodeOutline document outlineIcons pm
         return Products

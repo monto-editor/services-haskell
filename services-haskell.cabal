@@ -15,7 +15,7 @@ data-files:
 
 executable services-haskell
   main-is:             Main.hs
-  ghc-options:         -Wall
+  ghc-options:         -Wall -O2
   other-modules:       Tokens,
                        SourceSpan,
                        Util,
