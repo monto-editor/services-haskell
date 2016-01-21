@@ -11,8 +11,6 @@ import           Data.Aeson.TH
 import           Data.Maybe
 import           Data.Text (Text)
 
-import           Paths_services_haskell
-
 type Icon = FilePath
 data Outline = Outline
     { description :: Text
@@ -30,17 +28,15 @@ data OutlineIcons = OutlineIcons
                   , typ     :: Icon
                   }
 
-getOutlineIcons :: IO OutlineIcons
-getOutlineIcons = OutlineIcons
-                  <$> getResource "assets/class.png"
-                  <*> getResource "assets/module.png"
-                  <*> getResource "assets/private.png"
-                  <*> getResource "assets/public.png"
-                  <*> getResource "assets/type.png"
+getOutlineIcons :: String -> IO OutlineIcons
+getOutlineIcons url = OutlineIcons
+                  <$> getResource "class.png"
+                  <*> getResource "module.png"
+                  <*> getResource "private.png"
+                  <*> getResource "public.png"
+                  <*> getResource "type.png"
   where
-    getResource name = do
-      path <- getDataFileName name
-      return $ "file://" ++ path
+    getResource name = return $ url ++ name
 
 encodeOutline :: Document -> OutlineIcons -> ParsedModule -> Outline
 encodeOutline doc icons pm =

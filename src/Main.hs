@@ -23,6 +23,7 @@ import           SysTools
 
 import           Control.Exception
 import           Control.Monad
+import           Control.Concurrent
 
 import           Data.Aeson
 
@@ -31,9 +32,17 @@ import qualified Data.ByteString.Lazy as BL
 import           Data.Maybe
 import           Data.IORef
 import           Data.Text (Text)
+import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import           Data.Tree
 import qualified Data.Vector as V
+
+import qualified Network.Wai.Handler.Warp as Warp
+import qualified Network.Wai as Wai
+import           Network.HTTP.Types
+
+
+import           Options.Applicative hiding (str)
 
 import           System.ZMQ4 (Context)
 import qualified System.ZMQ4 as Z
@@ -54,29 +63,61 @@ import           Monto.Types hiding (fromText)
 import           Monto.VersionMessage (VersionMessage)
 import qualified Monto.VersionMessage as V
 
-data ZMQConfig = ZMQConfig
+import           Paths_services_haskell
+
+data Config = Config
                { zeromqContext :: Context
                , serviceAddress :: String
                , registrationAddress :: String
                , configurationAddress :: String
+               , resourcePort :: Int
                }
+
+parseConfig :: Context -> Parser Config
+parseConfig ctx =
+  Config
+  <$> pure ctx
+  <*> strOption
+         ( long "service-address"
+        <> metavar "ADDRESS"
+        <> help "The address without port on which services listen on" )
+  <*> strOption
+         ( long "registration"
+        <> metavar "ADDRESS"
+        <> help "The address on which services register themselves" )
+  <*> strOption
+         ( long "configuration"
+        <> metavar "ADDRESS"
+        <> help "The address on which services can be configured" )
+  <*> option auto
+         ( long "resource-port"
+        <> metavar "PORT"
+        <> help "The port on which resources get published" )
 
 data Interrupted = Interrupted
   deriving (Eq,Show)
+
+resourceServer :: Config -> FilePath-> IO ()
+resourceServer cfg root =
+  Warp.run (resourcePort cfg) $ \req respond -> respond $
+    Wai.responseFile
+       status200
+       [("Content-Type", "image/png")]
+       (printf "%s/%s" root (T.unpack (head (Wai.pathInfo req))))
+       Nothing
 
 main :: IO ()
 main =
   Z.withContext $ \ctx -> do
     _ <- installHandler sigINT  (Catch exitSuccess) Nothing
     _ <- installHandler sigTERM (Catch exitSuccess) Nothing
-    outlineIcons <- getOutlineIcons
 
-    let cfg = ZMQConfig
-            { zeromqContext = ctx
-            , serviceAddress = "tcp://localhost:"
-            , registrationAddress = "tcp://localhost:5004"
-            , configurationAddress = "tcp://localhost:5007"
-            }
+    cfg <- execParser $ info (helper <*> parseConfig ctx)
+      ( fullDesc <> header "service-haskell - Monto services for Haskell" )
+
+    outlineIcons <- getOutlineIcons $ printf "http://localhost:%d/" (resourcePort cfg)
+    assetDir <- getDataFileName "assets"
+    _ <- forkIO $ resourceServer cfg assetDir
 
     eitherErrorOrResp <- register cfg RegisterServiceRequest
             { R.serviceID = "ghc"
@@ -113,7 +154,7 @@ main =
                     Left err ->
                       liftIO $ printf "Could not decode version message %s\n%s\n" (B.unpack rawMsg) err
 
-register :: ZMQConfig -> RegisterServiceRequest -> IO (Either Text Port)
+register :: Config -> RegisterServiceRequest -> IO (Either Text Port)
 register cfg request =
   Z.withSocket (zeromqContext cfg) Z.Req $ \registrationSocket -> do
     Z.connect registrationSocket (registrationAddress cfg)
@@ -124,7 +165,7 @@ register cfg request =
       Just (RegisterServiceResponse msg Nothing) -> return (Left msg)
       Nothing -> return $ Left "could not register service"
 
-deregister :: ZMQConfig -> ServiceID -> IO ()
+deregister :: Config -> ServiceID -> IO ()
 deregister cfg sid =
   Z.withSocket (zeromqContext cfg) Z.Req $ \registrationSocket -> do
     Z.connect registrationSocket (registrationAddress cfg)

@@ -4,7 +4,7 @@ let
   env = pkgs.haskellPackages.ghcWithPackages(p: with p; [
     Cabal cabal-install ghc ghc-paths hlint text aeson
     vector containers syb time bytestring zeromq4-haskell
-    unix
+    unix warp wai optparse-applicative
     (callPackage ../broker { })
   ]);
 
