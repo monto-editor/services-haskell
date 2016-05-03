@@ -40,4 +40,4 @@ lineColumnToOffsetLength (Document vec) (RealSrcSpan sp) =
      { offset = startOff
      , length = endOff - startOff
      }
-lineColumnToOffsetLength _ (UnhelpfulSpan _) = Nothing
+lineColumnToOffsetLength _ _ = Nothing

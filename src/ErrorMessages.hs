@@ -13,8 +13,8 @@ import Outputable
 import Data.Aeson
 import Data.Text (Text)
 
-encodeErrorMessage :: DynFlags -> Document -> ErrMsg -> Value
-encodeErrorMessage dflags doc errMsg =
+encodeSourceErrorMessage :: DynFlags -> Document -> ErrMsg -> Value
+encodeSourceErrorMessage dflags doc errMsg =
   let srcSpan = lineColumnToOffsetLength doc (errMsgSpan errMsg)
   in case srcSpan of
        Just sp -> object
@@ -28,3 +28,13 @@ encodeErrorMessage dflags doc errMsg =
          ]
        Nothing -> error $ "cannot encode error message due to missing source span: "
          ++ show (runSDoc (errMsgShortDoc errMsg) (initSDocContext dflags defaultUserStyle))
+
+encodeGHCErrorMessage :: GhcException -> Value
+encodeGHCErrorMessage errMsg =
+  object
+    [ "offset" .= (0 :: Int)
+    , "length" .= (0 :: Int)
+    , "level"  .= ("error" :: Text)
+    , "description" .= show errMsg
+    , "category" .= ("type" :: Text)
+    ]

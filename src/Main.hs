@@ -19,6 +19,7 @@ import           DynFlags hiding (language)
 import           Bag
 import           HscTypes
 import           GhcMonad
+import           Panic
 import           SysTools
 
 import           Control.Exception
@@ -35,7 +36,6 @@ import           Data.Text (Text)
 import qualified Data.Text as T
 import qualified Data.Text.IO as T
 import           Data.Tree
-import qualified Data.Vector as V
 
 import qualified Network.Wai.Handler.Warp as Warp
 import qualified Network.Wai as Wai
@@ -52,16 +52,18 @@ import           System.Directory
 
 import           Text.Printf
 
-import           Monto.ProductMessage (ProductMessage(ProductMessage))
+import           Monto.ProductMessage (ProductMessage)
 import qualified Monto.ProductMessage as P
+import qualified Monto.ProductDescription as PD
 import           Monto.DeregisterService (DeregisterService(DeregisterService))
 import           Monto.RegisterServiceRequest (RegisterServiceRequest(RegisterServiceRequest))
 import qualified Monto.RegisterServiceRequest as R
 import           Monto.RegisterServiceResponse
-import           Monto.ServiceDependency
+import           Monto.Request as Req
+import           Monto.ProductDependency
 import           Monto.Types hiding (fromText)
-import           Monto.VersionMessage (VersionMessage)
-import qualified Monto.VersionMessage as V
+import           Monto.SourceMessage (SourceMessage)
+import qualified Monto.SourceMessage as S
 
 import           Paths_services_haskell
 
@@ -97,7 +99,7 @@ parseConfig ctx =
 data Interrupted = Interrupted
   deriving (Eq,Show)
 
-resourceServer :: Config -> FilePath-> IO ()
+resourceServer :: Config -> FilePath -> IO ()
 resourceServer cfg root =
   Warp.run (resourcePort cfg) $ \req respond -> respond $
     Wai.responseFile
@@ -124,20 +126,22 @@ main =
             , R.label = "Glasgow Haskell Compiler"
             , R.description = "The GHC compiler does tokenization, parsing and typechecking"
             , R.options = Nothing
-            , R.dependencies = V.fromList [ SourceDependency "haskell" ]
-            , R.language = "haskell"
-            , R.products = V.fromList ["tokens", "ast", "errors", "outline"]
+            , R.dependencies = [ SourceDependency "haskell" ]
+            , R.products = [ PD.ProductDescription "tokens" "haskell"
+                           , PD.ProductDescription "ast" "haskell"
+                           , PD.ProductDescription "errors" "haskell"
+                           , PD.ProductDescription "outline" "haskell"
+                           ]
             }
 
     case eitherErrorOrResp of
       Left errorMessage -> printf "registration failed due to %s\n" (show errorMessage)
       Right (Port p) ->
-        Z.withSocket ctx Z.Pair $ \serviceSocket ->
-          Z.withSocket ctx Z.Sub $ \configSocket -> do
+        Z.withSocket ctx Z.Pair $ \serviceSocket -> do
+          --Z.withSocket ctx Z.Sub $ \configSocket -> do
             Z.connect serviceSocket $ serviceAddress cfg ++ show p
             printf "connected to %s%d\n" (serviceAddress cfg) p
-
-            Z.connect configSocket (configurationAddress cfg)
+            --Z.connect configSocket (configurationAddress cfg)
             flip finally (deregister cfg "ghc") $ defaultErrorHandler defaultFatalMessager defaultFlushOut $
               runGhc (Just libdir) $ do
                 dflags0 <- getSessionDynFlags
@@ -147,12 +151,13 @@ main =
                 forever $ do
                   rawMsg <- liftIO $ Z.receive serviceSocket
                   case eitherDecodeStrict rawMsg of
-                    Right msgs ->
-                      V.forM_ msgs $ \msg -> do
-                        productMessages <- onVersionMessage outlineIcons msg
-                        liftIO $ forM_ productMessages $ Z.send serviceSocket [] . BL.toStrict . encode
+                    Right (Req.Request _ _ (SourceMessage m:_)) -> do
+                      productMessages <- onSourceMessage outlineIcons m
+                      liftIO $ forM_ productMessages $ Z.send serviceSocket [] . BL.toStrict . encode
+                    Right _ ->
+                      liftIO $ printf "Request did not contain a source message: %s\n" (B.unpack rawMsg)
                     Left err ->
-                      liftIO $ printf "Could not decode version message %s\n%s\n" (B.unpack rawMsg) err
+                      liftIO $ printf "Could not decode request message %s\n%s\n" (B.unpack rawMsg) err
 
 register :: Config -> RegisterServiceRequest -> IO (Either Text Port)
 register cfg request =
@@ -171,14 +176,14 @@ deregister cfg sid =
     Z.connect registrationSocket (registrationAddress cfg)
     Z.send registrationSocket [] $ BL.toStrict $ encode (DeregisterService sid)
 
-onVersionMessage :: GhcMonad m => OutlineIcons -> VersionMessage -> m [ProductMessage]
-onVersionMessage outlineIcons versionMessage = do
-  prods <- compile outlineIcons (V.contents versionMessage)
+onSourceMessage :: GhcMonad m => OutlineIcons -> SourceMessage -> m [ProductMessage]
+onSourceMessage outlineIcons sourceMessage = do
+  prods <- compile outlineIcons (S.contents sourceMessage)
   return $ prods >>= \ps ->
-    let tokenMessage = toProductMessage versionMessage "tokens" . toJSON <$> tokens ps
+    let tokenMessage = toProductMessage sourceMessage "tokens" . toJSON <$> tokens ps
         --astMessage = toProductMessage versionMessage "ast" . astToJSON <$> ast ps
-        outlineMessage = toProductMessage versionMessage "outline" . toJSON <$> outline ps
-        errorMessage = toProductMessage versionMessage "errors" $ toJSON $ errors ps
+        outlineMessage = toProductMessage sourceMessage "outline" . toJSON <$> outline ps
+        errorMessage = toProductMessage sourceMessage "errors" $ toJSON $ errors ps
     in catMaybes
            [ tokenMessage
            --, astMessage
@@ -186,20 +191,19 @@ onVersionMessage outlineIcons versionMessage = do
            , Just errorMessage
            ]
 
-toProductMessage :: VersionMessage -> Product -> Value -> ProductMessage
-toProductMessage versionMessage prod contents =
-  ProductMessage
-    { P.versionId = V.versionId versionMessage
-    , P.source = V.source versionMessage
-    , P.serviceId = "ghc"
+toProductMessage :: SourceMessage -> Product -> Value -> ProductMessage
+toProductMessage sourceMessage prod contents =
+  P.ProductMessage
+    { P.id = S.id sourceMessage
+    , P.source = S.source sourceMessage
+    , P.serviceID = "ghc"
     , P.product = prod
-    , P.language = V.language versionMessage
+    , P.language = S.language sourceMessage
     , P.contents = contents
-    , P.dependencies = V.empty
     }
 
 compile :: GhcMonad m => OutlineIcons -> Text -> m [Products]
-compile outlineIcons documentText = flip gfinally clearTargets $ do
+compile outlineIcons documentText = flip gfinally clearTargets $ handleGhcException' $ do
   let document = fromText documentText
   dflags <- getSessionDynFlags
   srcFile <- liftIO $ newTempName dflags "hs"
@@ -216,7 +220,7 @@ compile outlineIcons documentText = flip gfinally clearTargets $ do
           { tokens = Nothing
           , ast = Nothing
           , outline = Nothing
-          , errors = encodeErrorMessage dflags document <$> bagToList err
+          , errors = encodeSourceErrorMessage dflags document <$> bagToList err
           }
       Right pm -> do
         typeErrors <- handleSourceError
@@ -228,8 +232,16 @@ compile outlineIcons documentText = flip gfinally clearTargets $ do
         return Products
           { tokens = Just $ encodeTokens document pm
           , ast = Just $ encodeAST dflags document (unLoc (pm_parsed_source pm))
-          , outline = Just $ encodeOutline document outlineIcons pm
-          , errors = encodeErrorMessage dflags document <$> bagToList typeErrors
+          , outline = Just $ encodeOutline dflags document outlineIcons pm
+          , errors = encodeSourceErrorMessage dflags document <$> bagToList typeErrors
+          }
+  where
+    handleGhcException' = handleGhcException $ \e ->
+      return $ return Products
+          { tokens = Nothing
+          , ast = Nothing
+          , outline = Nothing
+          , errors = return $ encodeGHCErrorMessage e
           }
 
 clearTargets :: GhcMonad m => m ()
